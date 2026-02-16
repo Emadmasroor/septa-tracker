@@ -1,3 +1,5 @@
+import requests
+
 def queryRoute(origin):
     # Limited functionality. Origin assumes destination and direction.
     # Media/Wawa Line is hard-coded. Pulls 20 most-recent results, then
@@ -15,6 +17,7 @@ def queryRoute(origin):
     SEPTA_url= f"https://www3.septa.org/api/Arrivals/index.php?station={origin_station}&results=20&direction={direction}"
     response = requests.get(SEPTA_url)
     data = response.json()
+    results = []
     for direction in data.values():
         for ns in direction:
             for entry in ns[direc]:
@@ -28,4 +31,10 @@ def queryRoute(origin):
                     else:
                         result = f"TRAIN TO {destination}\n{scheduled} {status} LATE "
                     break # One entry is enough.
-    return result
+    return results, result
+
+if __name__ == "__main__":
+    results, result = queryRoute("Swarthmore")
+    # print(results)
+    print(result)
+
