@@ -12,5 +12,5 @@ pip install adafruit-blinka-raspberry-pi5-piomatter numpy Pillow
 
 ```bash
 source venv/bin/activate
-sudo -E python3 display.py
+python3 script.py
 ```

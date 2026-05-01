@@ -1,0 +1,7 @@
+requests
+adafruit-blinka
+pillow
+numpy
+click
+Adafruit-Blinka-Raspberry-Pi5-Piomatter
+adafruit-circuitpython-matrixportal
