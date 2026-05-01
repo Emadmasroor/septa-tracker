@@ -14,6 +14,7 @@ N_ADDR_LINES = 4
 N_LANES = 4
 
 FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf"
+LOGO_PATH = "/home/fetcar/septa-tracker/rpi5/septa.png"
 FONT_SMALL = 14
 FONT_LARGE = 18
 
@@ -34,11 +35,10 @@ def fetch_trains():
         for key, value in data.items():
             for entry_list in value:
                 for entry in entry_list.get("Northbound", []):
-                    origin = entry.get("origin", "")
                     line = entry.get("line", "")
                     if "Media" not in line and "Wawa" not in line:
                         continue
-                    sched = entry["sched_time"][11:16]  # "HH:MM"
+                    sched = entry["sched_time"][11:16]
                     hour, minute = int(sched[:2]), int(sched[3:])
                     ampm = "AM" if hour < 12 else "PM"
                     hour12 = hour % 12 or 12
@@ -53,9 +53,7 @@ def fetch_trains():
                         except:
                             delay = 0
 
-                    dest = entry["destination"]
-                    trains.append({"dest": dest, "arrives": arrives, "delay": delay})
-
+                    trains.append({"dest": entry["destination"], "arrives": arrives, "delay": delay})
                     if len(trains) == 3:
                         return trains
 
@@ -104,24 +102,52 @@ def combine_maps(m1, m2, pixels_across):
             result.append(m2[idx + 1])
     return result
 
+logo_raw = Image.open(LOGO_PATH).convert("RGB")
+logo_h_crop = int(logo_raw.height * 0.68)
+logo_raw = logo_raw.crop((0, 0, logo_raw.width, logo_h_crop))
+logo_raw = logo_raw.crop((50, 50, logo_raw.width - 80, logo_raw.height))
+logo_size = 16
+ratio = logo_raw.width / logo_raw.height
+logo_raw = logo_raw.resize((int(logo_size * ratio), logo_size), Image.LANCZOS)
+
+logo_arr = np.array(logo_raw)
+
+# Sample blue from top-right region and red from top-left region
+blue = logo_arr[2, logo_arr.shape[1] - 3].tolist()
+red = logo_arr[2, 2].tolist()
+# print(f"sampled blue: {blue}, sampled red: {red}")
+
+# Fix corners
+logo_arr[0:2, 0:2] = red
+logo_arr[-2:, 0:2] = red
+logo_arr[0:2, -2:] = blue
+logo_arr[-2:, -2:] = blue
+logo_raw = Image.fromarray(logo_arr)
+
 def render_frame(trains):
     canvas = Image.new("RGB", (WIDTH, HEIGHT), BLACK)
     draw = ImageDraw.Draw(canvas)
     font_lg = ImageFont.truetype(FONT_PATH, FONT_LARGE)
     font_sm = ImageFont.truetype(FONT_PATH, FONT_SMALL)
 
+    # SEPTA text then logo to the right
+    draw.text((2, 2), "SEPTA", font=font_sm, fill=YELLOW)
+    text_w = int(draw.textlength("SEPTA", font=font_sm))
+    canvas.paste(logo_raw, (text_w + 10, 2))
+
+    # Time top-right
     now = datetime.now().strftime("%I:%M %p")
     tw = draw.textlength(now, font=font_sm)
-    draw.text((WIDTH - tw - 2, 2), now, font=font_sm, fill=WHITE)
-    draw.text((2, 2), "SEPTA", font=font_sm, fill=YELLOW)
+    draw.text((WIDTH - tw - 3, 2), now, font=font_sm, fill=WHITE)
+
     draw.line([(0, 20), (WIDTH, 20)], fill=GRAY, width=1)
 
     row_h = (HEIGHT - 22) // len(trains)
     for i, train in enumerate(trains):
         y = 22 + i * row_h
         color = GREEN if train["delay"] == 0 else RED
-        draw.text((4, y), train["dest"], font=font_lg, fill=WHITE)
-        draw.text((4, y + FONT_LARGE + 1), train["arrives"], font=font_sm, fill=color)
+        draw.text((2, y), train["dest"], font=font_lg, fill=WHITE)
+        draw.text((2, y + FONT_LARGE + 1), train["arrives"], font=font_sm, fill=color)
         if train["delay"] > 0:
             draw.text((94, y + FONT_LARGE + 1), f"+{train['delay']}", font=font_sm, fill=RED)
         else:
@@ -164,11 +190,11 @@ last_fetch = 0
 try:
     while True:
         now = time.time()
-        if now - last_fetch > 60:  # fetch trains every 60 seconds
+        if now - last_fetch > 60:
             trains = fetch_trains()
             last_fetch = now
         framebuffer[:] = render_frame(trains)
         matrix.show()
-        time.sleep(30)  # redraw every 30s to update clock
+        time.sleep(30)
 except KeyboardInterrupt:
     pass
