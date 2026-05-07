@@ -5,6 +5,7 @@ import PIL.ImageDraw as ImageDraw
 import PIL.ImageFont as ImageFont
 import adafruit_blinka_raspberry_pi5_piomatter as piomatter
 from datetime import datetime
+import threading
 import time
 import requests
 
@@ -52,6 +53,7 @@ def fetch_trains_southbound():
 
 def parse_trains(data, direction_key, count=1):
     trains = []
+    now = datetime.now()
     for key, value in data.items():
         if not isinstance(value, list):
             continue
@@ -59,11 +61,25 @@ def parse_trains(data, direction_key, count=1):
             if not isinstance(entry_list, dict):
                 continue
             for entry in entry_list.get(direction_key, []):
+                dest   = entry.get("destination") or ""
                 line   = entry.get("line") or ""
                 origin = entry.get("origin") or ""
-                if "Media" not in line and "Wawa" not in line and \
-                   "Media" not in origin and "Wawa" not in origin:
-                    continue
+
+                if direction_key == "Southbound":
+                    if "Wawa" not in dest and "Media" not in dest:
+                        continue
+                else:
+                    if "Media" not in line and "Wawa" not in line and \
+                       "Media" not in origin and "Wawa" not in origin:
+                        continue
+
+                # Skip trains that have already departed
+                try:
+                    sched_dt = datetime.strptime(entry["sched_time"], "%Y-%m-%d %H:%M:%S.%f")
+                    if sched_dt < now:
+                        continue
+                except:
+                    pass
 
                 sched = entry["sched_time"][11:16]
                 hour, minute = int(sched[:2]), int(sched[3:])
@@ -80,7 +96,7 @@ def parse_trains(data, direction_key, count=1):
                     except:
                         delay = 0
 
-                trains.append({"dest": entry["destination"], "arrives": arrives, "delay": delay})
+                trains.append({"dest": dest, "arrives": arrives, "delay": delay})
                 if len(trains) == count:
                     return trains
 
@@ -92,8 +108,6 @@ def no_trains():
 
 
 def build_map(width, height, n_addr_lines, serpentine, row_offset=0):
-    # Replicates piomatter's internal make_matrixmap logic for a single port.
-    # row_offset shifts the map into the correct region of the full framebuffer.
     panel_height = 2 << n_addr_lines
     half_panel_height = 1 << n_addr_lines
     v_panels = height // panel_height
@@ -117,8 +131,6 @@ def build_map(width, height, n_addr_lines, serpentine, row_offset=0):
 
 
 def combine_maps(m1, m2, pixels_across):
-    # Interleave two port maps at the lane level so piomatter's render loop
-    # sees (port1_lane0, port1_lane1, port2_lane0, port2_lane1) per pixel.
     result = []
     for addr in range(16):
         for x in range(pixels_across):
@@ -132,16 +144,12 @@ def combine_maps(m1, m2, pixels_across):
 
 def load_septa_logo(path, size=16):
     img = Image.open(path).convert("RGB")
-    # Crop bottom ~32% which contains the "SEPTA" text wordmark
     img = img.crop((0, 0, img.width, int(img.height * 0.68)))
-    # Crop white border around the rounded rectangle
     img = img.crop((50, 50, img.width - 80, img.height))
     ratio = img.width / img.height
     img = img.resize((int(size * ratio), size), Image.LANCZOS)
-
     arr = np.array(img)
-    arr = arr[:, :, ::-1]  # swap RGB to BGR
-    # Sample true blue/red from inside the logo to fix LANCZOS corner artifacts
+    arr = arr[:, :, ::-1]
     blue = arr[2, arr.shape[1] - 3].tolist()
     red  = arr[2, 2].tolist()
     arr[0:2,  0:2]  = red
@@ -152,8 +160,6 @@ def load_septa_logo(path, size=16):
 
 
 def reorder_rows(arr):
-    # Panels are physically wired so that within each port, the two panel rows
-    # are swapped relative to the framebuffer scan order.
     reordered = np.zeros_like(arr)
     reordered[0:32]   = arr[32:64]
     reordered[32:64]  = arr[0:32]
@@ -193,14 +199,7 @@ def draw_train_row(draw, y, train, font_lg, font_sm):
         draw.text((100, y + FONT_LARGE + 2), "On time", font=font_sm, fill=GREEN)
 
 
-septa_logo = load_septa_logo(SEPTA_LOGO_PATH)
-
-# Fake data for testing — replace with live fetch when ready
-northbound = [{"dest": "Norristown", "arrives": "6:45 PM", "delay": 4}]
-southbound = [{"dest": "Wawa",       "arrives": "6:50 PM", "delay": 0}]
-
-
-def render_frame(northbound, southbound):
+def render_septa(northbound, southbound):
     canvas = Image.new("RGB", (WIDTH, HEIGHT), BLACK)
     draw = ImageDraw.Draw(canvas)
     font_lg = ImageFont.truetype(FONT_PATH, FONT_LARGE)
@@ -232,13 +231,29 @@ def render_frame(northbound, southbound):
     return np.ascontiguousarray(np.flipud(np.fliplr(arr))).copy()
 
 
-# Build pixel map for two-port 4x4 panel grid.
-# Port 1 (bottom 4x2) maps to fb rows 64-127, port 2 (top 4x2) to rows 0-63.
+septa_logo = load_septa_logo(SEPTA_LOGO_PATH)
+
 m1, pixels_across = build_map(WIDTH, 64, N_ADDR_LINES, serpentine=True, row_offset=64)
 m2, _             = build_map(WIDTH, 64, N_ADDR_LINES, serpentine=True, row_offset=0)
 pixelmap = combine_maps(m2, m1, pixels_across)
 
-framebuffer = render_frame(northbound, southbound)
+wait_for_network()
+
+fetch_state = {
+    "northbound": fetch_trains_northbound(),
+    "southbound": fetch_trains_southbound(),
+    "fetching": False,
+}
+
+
+def fetch_in_background():
+    fetch_state["fetching"] = True
+    fetch_state["northbound"] = fetch_trains_northbound()
+    fetch_state["southbound"] = fetch_trains_southbound()
+    fetch_state["fetching"] = False
+
+
+framebuffer = render_septa(fetch_state["northbound"], fetch_state["southbound"])
 
 geometry = piomatter.Geometry(
     width=WIDTH,
@@ -257,16 +272,17 @@ matrix = piomatter.PioMatter(
 )
 
 last_fetch = 0
+
 try:
     while True:
         now = time.time()
-        if now - last_fetch > 60:
-            # Uncomment when ready for live data:
-            # northbound = fetch_trains_northbound()
-            # southbound = fetch_trains_southbound()
+
+        if now - last_fetch > 60 and not fetch_state["fetching"]:
+            threading.Thread(target=fetch_in_background, daemon=True).start()
             last_fetch = now
-        framebuffer[:] = render_frame(northbound, southbound)
+
+        framebuffer[:] = render_septa(fetch_state["northbound"], fetch_state["southbound"])
         matrix.show()
-        time.sleep(30)
+        time.sleep(1)
 except KeyboardInterrupt:
     pass
