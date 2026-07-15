@@ -19,8 +19,8 @@ jobs:
           python-version: '3.12' # Change to whatever version you need
 
       # 3. (Optional but likely needed) Install dependencies if you have them
-      # - name: Install dependencies
-      #   run: pip install -r requirements.txt
+      - name: Install dependencies
+        run: pip install -r requirements.txt
 
       # 4. Run your script
       - name: Call SEPTA API
