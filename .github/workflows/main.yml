@@ -1,0 +1,9 @@
+name: Morning Trains Lookup
+on:
+  schedule:
+    - cron: '30 14 * * *'
+
+jobs:
+  steps:
+    - name: Call SEPTA API
+      run: python lookuptrains.py
